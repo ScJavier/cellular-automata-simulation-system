@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------
+  # 1. PostgreSQL (La Base de Datos)
+  # ----------------------------------------------------
+  postgres:
+    image: postgres:16-alpine 
+    container_name: cass_postgres_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    # Solo exponemos el puerto si queremos conectarnos con DBeaver (opcional)
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Ejecuta el script de creación de esquema al inicio (MEJORA DE DE)
+      - ./schema_setup.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------
+  # 2. FastAPI (API de Ingesta y Simulación)
+  # ----------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cass_api_service
+    restart: always
+    # Espera a que la BD esté saludable antes de iniciar la API
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Estos valores serán leídos por api_service.py
+      DB_HOST: postgres # <--- ¡CLAVE! Usamos el nombre del servicio de Docker
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      # API_HOST para el frontend (la url externa)
+      API_HOST: ${API_HOST}
+    ports:
+      - "8000:8000"
+    # El comando para iniciar FastAPI con Uvicorn
+    command: uvicorn api_service:app --host 0.0.0.0 --port 8000 --workers 1
+    volumes:
+      # Monta tu código local para desarrollo y recarga en tiempo real
+      - .:/app 
+
+  # ----------------------------------------------------
+  # 3. Streamlit (Frontend/UI de Control)
+  # ----------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cass_frontend_ui
+    restart: always
+    depends_on:
+      - api # Espera a que la API esté lista
+    ports:
+      - "8501:8501"
+    environment:
+      # El frontend necesita saber dónde está la API
+      # Nota: Usamos la URL INTERNA de Docker, porque el frontend lo llama
+      API_HOST: http://api:8000
+    command: streamlit run frontend.py --server.port 8501 --server.address 0.0.0.0
+    volumes:
+      - .:/app 
+
+# Definición de volúmenes persistentes
+volumes:
+  postgres_data:
