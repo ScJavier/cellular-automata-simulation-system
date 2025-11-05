@@ -12,7 +12,10 @@ CREATE TABLE IF NOT EXISTS raw_data.experiments (
     start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     end_time TIMESTAMP WITH TIME ZONE,
     duration_seconds NUMERIC,
-    status VARCHAR(50) DEFAULT 'RUNNING'
+    status VARCHAR(50) DEFAULT 'RUNNING',
+    rules_notation VARCHAR(50) NOT NULL,
+    survival_rules VARCHAR(20),
+    birth_rules VARCHAR(20)
 );
 
 CREATE TABLE IF NOT EXISTS raw_data.generation_trace (
