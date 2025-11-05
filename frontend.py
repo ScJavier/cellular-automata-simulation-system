@@ -4,9 +4,33 @@ import json
 import datetime # Importación necesaria para datetime.now()
 import time      # Importación necesaria para time.sleep()
 import os
+import re
+from typing import Optional, List
 
-# --- Configuración ---
-API_HOST = os.environ.get("API_HOST", None)
+# --- Configuración (LEER DE VARIABLES DE ENTORNO) ---
+try:
+    API_HOST = os.environ["API_HOST"]
+except KeyError:
+    st.error("🚨 ERROR FATAL: La variable de entorno 'API_HOST' no está definida.")
+    st.stop()
+
+
+# --- Funciones de Utilidad ---
+
+def parse_rules(rules_str: str) -> Optional[List[int]]:
+    """Convierte una cadena de reglas (ej: '2,3') a una lista de enteros."""
+    if not rules_str:
+        return []
+    
+    # Limpia la cadena y acepta solo dígitos y comas
+    cleaned_str = re.sub(r'[^\d,]', '', rules_str)
+    
+    try:
+        # Convierte cada número a entero y filtra los vacíos
+        return [int(n.strip()) for n in cleaned_str.split(',') if n.strip()]
+    except ValueError:
+        return None # Indica un fallo en el parsing
+
 
 # --- Estructura de la Interfaz ---
 
@@ -17,45 +41,70 @@ st.subheader("Simulación y Registro de Experimentos de Autómatas Celulares")
 # Definimos el nombre por defecto aquí
 default_name = "Corrida_Automatica_" + datetime.datetime.now().strftime("%Y%m%d_%H%M")
 
+
 # --- Formulario de Configuración de Experimento ---
 
 with st.form("experiment_form"):
-    st.markdown("### Configuración del Experimento")
+    st.markdown("### 1. Parámetros de la Simulación")
     
-    # Parámetros de la API
-    experiment_name = st.text_input(
-        "Nombre del Experimento", 
-        value=default_name,
-        help="Nombre descriptivo para la BD."
-    )
-    board_size = st.slider(
-        "Tamaño del Tablero (N x N)", 
-        min_value=10, max_value=100, value=25, step=5,
-        help="Dimensión del tablero (ej: 25x25)."
-    )
-    num_steps = st.slider(
-        "Número de Pasos/Generaciones", 
-        min_value=10, max_value=200, value=50, step=10,
-        help="Total de iteraciones de la simulación a registrar."
-    )
-    initial_density = st.slider(
-        "Densidad Inicial de Población", 
-        min_value=0.1, max_value=0.9, value=0.4, step=0.05,
-        help="Porcentaje de celdas vivas al inicio (0.1 a 0.9)."
-    )
+    experiment_name = st.text_input("Nombre del Experimento", value=default_name)
     
-    # Botón de envío
-    submitted = st.form_submit_button("🚀 Iniciar Experimento y Guardar RAW")
+    col_size, col_steps, col_density = st.columns(3)
+    
+    with col_size:
+        board_size = st.slider("Tamaño del Tablero", min_value=10, max_value=100, value=25, step=5)
+    with col_steps:
+        num_steps = st.slider("Número de Pasos/Generaciones", min_value=10, max_value=200, value=50, step=10)
+    with col_density:
+        initial_density = st.slider("Densidad Inicial", min_value=0.1, max_value=0.9, value=0.4, step=0.05)
+    
+    st.markdown("---")
+    st.markdown("### 2. Reglas del Autómata Celular (Notación S/B)")
+    
+    col_survival, col_birth = st.columns(2)
+    
+    with col_survival:
+        survival_rules_str = st.text_input(
+            "Reglas de Supervivencia (S)", 
+            value="2,3", 
+            help="Números de vecinos para que una célula VIVA sobreviva. Ej: '2,3' (Conway)."
+        )
+    
+    with col_birth:
+        birth_rules_str = st.text_input(
+            "Reglas de Nacimiento (B)", 
+            value="3", 
+            help="Números de vecinos para que una célula MUERTA nazca. Ej: '3' (Conway)."
+        )
+    
+    st.markdown("---")
+    submitted = st.form_submit_button("🚀 Iniciar Experimento Configurable")
+
 
 # --- Lógica de Envío ---
 
 if submitted:
+    
+    # Validar y parsear las reglas
+    survival_rules = parse_rules(survival_rules_str)
+    birth_rules = parse_rules(birth_rules_str)
+    
+    if survival_rules is None or birth_rules is None:
+        st.error("❌ Error: Las reglas de Supervivencia o Nacimiento contienen caracteres no válidos (solo se permiten números y comas).")
+        st.stop()
+
+    # Construir la notación S/B para la auditoría en la BD
+    rules_notation = f"B{','.join(map(str, birth_rules))}/S{','.join(map(str, survival_rules))}"
+    
     # 1. Preparar la carga útil (Payload)
     payload = {
         "name": experiment_name,
         "board_size": board_size,
         "num_steps": num_steps,
-        "initial_density": initial_density
+        "initial_density": initial_density,
+        "survival_rules": survival_rules,    # Pasa la lista[int]
+        "birth_rules": birth_rules,          # Pasa la lista[int]
+        "rules_notation": rules_notation     # Pasa la notación para la BD
     }
     
     # Placeholder para mostrar el estado en tiempo real
@@ -63,29 +112,27 @@ if submitted:
     
     try:
         # 2. Llamada a la API para iniciar (POST /run_experiment)
-        status_placeholder.info(f"Enviando solicitud para iniciar: {API_HOST}/run_experiment")
+        status_placeholder.info(f"Enviando solicitud para iniciar: {API_HOST}/run_experiment con reglas: {rules_notation}")
         response = requests.post(f"{API_HOST}/run_experiment", json=payload)
         
-        # --- Solución Robusta: Verificar respuesta de la API ---
+        # ... (El resto de la lógica de polling y manejo de errores permanece igual) ...
+        # (Espera que hayas pegado la lógica de polling corregida de un paso anterior)
+        
         if response.status_code != 200:
-            # Si falla, muestra el error de la API y no continúa con el polling
             status_placeholder.error(f"❌ Error al iniciar (Código {response.status_code}): {response.json().get('detail', 'Error desconocido')}")
         else:
-            # Si es exitoso, inicia el Polling
             result = response.json()
             exp_id = result.get("experiment_id")
             
             # --- INICIO DEL POLLING ---
             
-            status_placeholder.warning(f"⏳ Experimento **#{exp_id}** iniciado. Monitoreando estado...")
+            status_placeholder.warning(f"⏳ Experimento **#{exp_id}** iniciado ({rules_notation}). Monitoreando estado...")
             
             status_loop = True
-            # progress_bar = st.progress(0) # Desactivado temporalmente ya que la API no reporta pasos completados
             
             while status_loop:
-                time.sleep(1) # Espera 1 segundo entre consultas (Polling Interval)
+                time.sleep(1) 
                 
-                # Consultar el estado
                 status_response = requests.get(f"{API_HOST}/status/{exp_id}")
                 
                 if status_response.status_code == 200:
@@ -93,25 +140,22 @@ if submitted:
                     current_status = status_data['status']
                     
                     if current_status == 'COMPLETED':
-                        # progress_bar.progress(100)
                         duration = status_data.get('duration_seconds')
-                        st.balloons() # Celebración visual
-                        status_placeholder.success(f"🎉 **Experimento #{exp_id} COMPLETADO** en {duration} segundos.")
+                        st.balloons() 
+                        status_placeholder.success(f"🎉 **Experimento #{exp_id} COMPLETADO** ({rules_notation}) en {duration} segundos.")
                         
                         st.markdown("---")
-                        st.subheader(f"Resultados del Experimento #{exp_id}")
+                        st.subheader(f"Metadatos Registrados")
                         st.json(status_data)
                         status_loop = False
                     
                     elif current_status == 'FAILED':
-                        # progress_bar.progress(100)
-                        status_placeholder.error(f"❌ Experimento #{exp_id} FALLÓ. Revisa los logs de la API y la BD.")
+                        status_placeholder.error(f"❌ Experimento #{exp_id} FALLÓ. Revisa los logs de la API.")
                         st.json(status_data)
                         status_loop = False
                     
                     else: # RUNNING
-                        # Muestra el estado actual mientras corre
-                        status_placeholder.warning(f"⏳ Experimento #{exp_id} en curso (Status: {current_status})... Pasos: {status_data['total_steps']}")
+                        status_placeholder.warning(f"⏳ Experimento #{exp_id} en curso (Status: {current_status})...")
                         
                 else:
                     status_placeholder.error("Error al consultar el estado de la API.")
@@ -125,4 +169,4 @@ if submitted:
 # --- Información Adicional ---
 
 st.markdown("---")
-st.caption("Nota: La API ejecuta la simulación de forma asíncrona, el frontend monitorea el estado a través del endpoint `/status/{id}`.")
+st.caption(f"API Host: {API_HOST}. Nota: La API ejecuta la simulación de forma asíncrona.")

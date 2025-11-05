@@ -10,6 +10,8 @@ import asyncio
 
 import os
 
+from typing import List
+
 # --- Configuración de la BD (Ajusta a tus valores) ---
 DB_HOST = os.environ.get("DB_HOST", None)
 DB_PORT = os.environ.get("DB_PORT", None)
@@ -22,31 +24,40 @@ app = FastAPI(title="Conway Data Generator API")
 # --- Esquemas de Datos para la API (Pydantic) ---
 
 class ExperimentConfig(BaseModel):
-    name: str = "Simulacion Aleatoria"
+    name: str = "Juego de la Vida (B3/S23)"
     board_size: int = 20
     num_steps: int = 50
     initial_density: float = 0.5 # 0.0 a 1.0
+    survival_rules: List[int] = [2, 3]
+    birth_rules: List[int] = [3]
+    rules_notation: str = "B3/S23"
 
 # --- Lógica de la Simulación ---
-
-def next_generation(board: np.ndarray) -> np.ndarray:
-    """Calcula la próxima generación del Juego de la Vida."""
-    # (Usaremos la función que ya definiste en el ejercicio anterior)
-    # ... [Mantenemos la lógica de next_generation aquí] ...
-    # Por simplicidad, asumiremos que esta función ya está en el archivo.
+def next_generation(board: np.ndarray, survival_rules: List[int], birth_rules: List[int]) -> np.ndarray:
+    """Calcula la próxima generación del AC basándose en las reglas S/B."""
     size = board.shape[0]
     new_board = np.zeros(board.shape, dtype=int)
+    
     for i in range(size):
         for j in range(size):
+            # Contar vecinos vivos (usando toroidales para bordes) - La lógica de conteo es la misma
+            # NOTA: Mejorar a conteo toroidal si quieres reglas que manejen los bordes de manera especial.
             total_live = np.sum(board[max(0, i-1):i+2, max(0, j-1):j+2]) - board[i, j]
             
+            # Aplicar las reglas S/B
             if board[i, j] == 1:
-                if total_live < 2 or total_live > 3:
-                    new_board[i, j] = 0
+                # REGLA DE SUPERVIVENCIA: Si está viva, debe cumplir las reglas de supervivencia para seguir viva
+                if total_live in survival_rules:
+                    new_board[i, j] = 1 # Sobrevive
                 else:
-                    new_board[i, j] = 1
-            elif total_live == 3:
-                new_board[i, j] = 1
+                    new_board[i, j] = 0 # Muere
+            else:
+                # REGLA DE NACIMIENTO: Si está muerta, debe cumplir las reglas de nacimiento para nacer
+                if total_live in birth_rules:
+                    new_board[i, j] = 1 # Nace
+                else:
+                    new_board[i, j] = 0 # Permanece muerta
+                    
     return new_board
 
 def get_db_connection():
@@ -87,9 +98,10 @@ async def run_experiment(config: ExperimentConfig):
         # Insertar experimento inicial
         cur.execute(
             """INSERT INTO raw_data.experiments 
-               (name, board_size, num_steps, initial_config, start_time) 
-               VALUES (%s, %s, %s, %s, %s) RETURNING experiment_id;""",
-            (config.name, config.board_size, config.num_steps, str(initial_board.tolist()), start_time)
+               (name, board_size, num_steps, initial_config, start_time, rules_notation, survival_rules, birth_rules) 
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING experiment_id;""",
+            (config.name, config.board_size, config.num_steps, str(initial_board.tolist()), start_time, 
+             config.rules_notation, str(config.survival_rules).strip('[]'), str(config.birth_rules).strip('[]'))
         )
         experiment_id = cur.fetchone()[0]
         conn.commit()
@@ -100,7 +112,15 @@ async def run_experiment(config: ExperimentConfig):
         if conn: conn.close()
 
     # 2. Ejecutar la simulación en un proceso que no bloquee la API (Future/Task)
-    asyncio.create_task(simulate_and_insert(experiment_id, config.num_steps, initial_board))
+    asyncio.create_task(
+        simulate_and_insert(
+            experiment_id, 
+            config.num_steps, 
+            initial_board, 
+            config.survival_rules,
+            config.birth_rules
+        )
+    )
     
     return {"message": "Experiment started in background", "experiment_id": experiment_id}
 
@@ -142,7 +162,13 @@ def get_experiment_status(experiment_id: int):
         if conn: conn.close()
 
 
-async def simulate_and_insert(experiment_id: int, num_steps: int, initial_board: np.ndarray):
+async def simulate_and_insert(
+    experiment_id: int,
+    num_steps: int,
+    initial_board: np.ndarray,
+    survival_rules: List[int],
+    birth_rules: List[int]
+    ):
     """Lógica de simulación asíncrona e ingesta."""
     conn = None
     board = initial_board
@@ -176,7 +202,7 @@ async def simulate_and_insert(experiment_id: int, num_steps: int, initial_board:
             conn.commit()
             
             # 3. Calcular la próxima generación y esperar
-            board = next_generation(board)
+            board = next_generation(board, survival_rules, birth_rules)
             await asyncio.sleep(step_delay) # Espera asíncrona
 
         # 4. Actualizar el estado final del experimento
